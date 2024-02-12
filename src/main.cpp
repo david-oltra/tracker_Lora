@@ -1,6 +1,21 @@
 #include <Arduino.h>
 #include <LoRaWan-Arduino.h>
 #include <SPI.h>
+#include <TinyGPSPlus.h>
+#include <HardwareSerial.h>
+#include <string>
+
+// GPS setup definitions
+static const int RXPin = 13, TXPin = 12;
+static const uint32_t GPSBaud = 9600;
+double gps_lat;
+double gps_lng;
+
+// The TinyGPSPlus object
+TinyGPSPlus gps;
+
+// The serial connection to the GPS device
+HardwareSerial ss(1);
 
 // LoRaWan setup definitions
 #define SCHED_MAX_EVENT_DATA_SIZE APP_TIMER_SCHED_EVENT_DATA_SIZE // Maximum size of scheduler events
@@ -65,25 +80,18 @@ static lmh_callback_t lora_callbacks = {BoardGetBatteryLevel, BoardGetUniqueId, 
 										lorawan_confirm_class_handler, lorawan_join_fail_handler,
 										lorawan_unconfirm_tx_finished, lorawan_confirm_tx_finished};
 
-
-// Check if the board has an LED port defined
-#define LED_ON HIGH
-#define LED_OFF LOW
-#ifndef LED_BUILTIN
-#ifdef ESP32
-#define LED_BUILTIN 2
-#endif
-#endif
-	
-void ledOff(void)
-{
-	digitalWrite(LED_BUILTIN, LED_OFF);
-}
-
 void setup()
 {
-	pinMode(LED_BUILTIN, OUTPUT);
-	digitalWrite(LED_BUILTIN, LOW);
+	// Initialize Serial for debug output
+	Serial.begin(115200);
+
+	Serial.println("=====================================");
+	Serial.println("GPS -> TTN  test");
+	Serial.println("=====================================");
+
+	// Initialize Serial GPS
+	ss.begin(GPSBaud,SERIAL_8N1,RXPin,TXPin);
+	
 
 	// Define the HW configuration between MCU and SX126x
 	hwConfig.CHIP_TYPE = SX1262_CHIP;	// Example uses an eByte E22 module with an SX1262
@@ -100,13 +108,6 @@ void setup()
 	hwConfig.USE_DIO3_TCXO = true;	// LORA DIO3 controls oscillator voltage (e.g. eByte E22 module)
 	hwConfig.USE_DIO3_ANT_SWITCH = false;	// LORA DIO3 does not control antenna
 
-
-	// Initialize Serial for debug output
-	Serial.begin(115200);
-
-	Serial.println("=====================================");
-	Serial.println("SX126x LoRaWan test");
-	Serial.println("=====================================");
 
 	// Initialize LoRa chip.
 	uint32_t err_code = lora_hardware_init(hwConfig);
@@ -149,6 +150,11 @@ void setup()
 
 void loop()
 {
+	while (ss.available() > 0)
+    	if (gps.encode(ss.read())){
+//			Serial.println(gps.location.lat());
+//			delay(1000);
+		}	
 }
 
 static void lorawan_join_fail_handler(void)
@@ -175,7 +181,7 @@ static void lorawan_has_joined_handler(void)
 	TimerStart(&appTimer);
 	// app_timer_start(lora_tx_timer_id, APP_TIMER_TICKS(LORAWAN_APP_TX_DUTYCYCLE), NULL);
 	Serial.println("Sending frame");
-	send_lora_frame();
+//	send_lora_frame();
 }
 
 /**@brief Function for handling LoRaWan received data from Gateway
@@ -272,21 +278,17 @@ static void send_lora_frame(void)
 		return;
 	}
 
-	uint32_t i = 0;
+	String buff = String(gps.location.lat(),6);
+	buff += ",";
+	buff += String(gps.location.lng(),6);
+
 	m_lora_app_data.port = LORAWAN_APP_PORT;
-	m_lora_app_data.buffer[i++] = 'H';
-	m_lora_app_data.buffer[i++] = 'e';
-	m_lora_app_data.buffer[i++] = 'l';
-	m_lora_app_data.buffer[i++] = 'l';
-	m_lora_app_data.buffer[i++] = 'o';
-	m_lora_app_data.buffer[i++] = ' ';
-	m_lora_app_data.buffer[i++] = 'w';
-	m_lora_app_data.buffer[i++] = 'o';
-	m_lora_app_data.buffer[i++] = 'r';
-	m_lora_app_data.buffer[i++] = 'l';
-	m_lora_app_data.buffer[i++] = 'd';
-	m_lora_app_data.buffer[i++] = '!';
-	m_lora_app_data.buffsize = i;
+	for (int i=0; i<buff.length(); i++){
+		m_lora_app_data.buffer[i] = buff[i];
+		Serial.print(buff[i]);
+	}
+	m_lora_app_data.buffsize = buff.length();
+	Serial.println(" ");
 
 	lmh_error_status error = lmh_send(&m_lora_app_data, LMH_UNCONFIRMED_MSG);
 	if (error == LMH_SUCCESS)
