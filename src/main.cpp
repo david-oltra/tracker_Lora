@@ -8,8 +8,6 @@
 // GPS setup definitions
 static const int RXPin = 13, TXPin = 12;
 static const uint32_t GPSBaud = 9600;
-double gps_lat;
-double gps_lng;
 
 // The TinyGPSPlus object
 TinyGPSPlus gps;
@@ -23,7 +21,7 @@ HardwareSerial ss(1);
 
 /**< Maximum number of events in the scheduler queue  */
 #define LORAWAN_APP_DATA_BUFF_SIZE 256 // Size of the data to be transmitted
-#define LORAWAN_APP_TX_DUTYCYCLE 5000 // Defines the application data transmission duty cycle. 30s, value in [ms]
+#define LORAWAN_APP_TX_DUTYCYCLE 60000 // Defines the application data transmission duty cycle. 30s, value in [ms]
 #define APP_TX_DUTYCYCLE_RND 1000 // Defines a random delay for application data transmission duty cycle. 1s, value in [ms]
 #define JOINREQ_NBTRIALS 3	
 
@@ -90,8 +88,7 @@ void setup()
 	Serial.println("=====================================");
 
 	// Initialize Serial GPS
-	ss.begin(GPSBaud,SERIAL_8N1,RXPin,TXPin);
-	
+	ss.begin(GPSBaud,SERIAL_8N1,RXPin,TXPin);	
 
 	// Define the HW configuration between MCU and SX126x
 	hwConfig.CHIP_TYPE = SX1262_CHIP;	// Example uses an eByte E22 module with an SX1262
@@ -115,6 +112,7 @@ void setup()
 	{
 		Serial.printf("lora_hardware_init failed - %d\n", err_code);
 	}
+
 
 	// Initialize Scheduler and timer (Must be after lora_hardware_init)
 	err_code = timers_init();
@@ -145,16 +143,33 @@ void setup()
 	lmh_setSubBandChannels(2);
 
 	// Start Join procedure
-	lmh_join();
+//	lmh_join();
 }
 
 void loop()
 {
 	while (ss.available() > 0)
     	if (gps.encode(ss.read())){
-//			Serial.println(gps.location.lat());
-//			delay(1000);
-		}	
+		}
+	if(gps.location.isValid()){
+
+		// Start Join procedure
+		Serial.println(lmh_join_status_get());
+		switch(lmh_join_status_get()){
+			case 0:
+				lmh_join();
+				break;
+			case 3:
+				lmh_join();
+				break;
+			default:
+				break;
+		}
+	}
+	else{
+		Serial.printf("lat: %d\tlng: %d\n", gps.location.lat(), gps.location.lng());
+	}
+	delay(1000);
 }
 
 static void lorawan_join_fail_handler(void)
@@ -278,6 +293,7 @@ static void send_lora_frame(void)
 		return;
 	}
 
+/*
 	String buff = String(gps.location.lat(),6);
 	buff += ",";
 	buff += String(gps.location.lng(),6);
@@ -289,12 +305,42 @@ static void send_lora_frame(void)
 	}
 	m_lora_app_data.buffsize = buff.length();
 	Serial.println(" ");
+*/
+	int32_t data_lat = gps.location.lat() * 10000;
+	int32_t data_lon = gps.location.lng() * 10000;
+	int32_t data_alt = gps.altitude.meters ()* 100;
+	int8_t data_prueba[11];
+	m_lora_app_data.port = LORAWAN_APP_PORT;
+	m_lora_app_data.buffer[0] = 01;
+	m_lora_app_data.buffer[1] = 136;
+	m_lora_app_data.buffer[2] = data_lat >> 16;
+	m_lora_app_data.buffer[3] = data_lat >> 8;
+	m_lora_app_data.buffer[4] = data_lat;
+	m_lora_app_data.buffer[5] = data_lon >> 16;
+	m_lora_app_data.buffer[6] = data_lon >> 8;
+	m_lora_app_data.buffer[7] = data_lon;
+	m_lora_app_data.buffer[8] = data_alt >> 16;
+	m_lora_app_data.buffer[9] = data_alt >> 8;
+	m_lora_app_data.buffer[10] = data_alt;
+	m_lora_app_data.buffsize = 11;
+
 
 	lmh_error_status error = lmh_send(&m_lora_app_data, LMH_UNCONFIRMED_MSG);
 	if (error == LMH_SUCCESS)
 	{
 	}
 	Serial.printf("lmh_send result %d\n", error);
+	Serial.print(m_lora_app_data.buffer[0]);
+	Serial.print(m_lora_app_data.buffer[1]);
+	Serial.print(m_lora_app_data.buffer[2]);
+	Serial.print(m_lora_app_data.buffer[3]);
+	Serial.print(m_lora_app_data.buffer[4]);
+	Serial.print(m_lora_app_data.buffer[5]);
+	Serial.print(m_lora_app_data.buffer[6]);
+	Serial.print(m_lora_app_data.buffer[7]);
+	Serial.print(m_lora_app_data.buffer[8]);
+	Serial.print(m_lora_app_data.buffer[9]);
+	Serial.println(m_lora_app_data.buffer[10]);
 }
 
 /**@brief Function for handling a LoRa tx timer timeout event.
@@ -303,9 +349,21 @@ static void tx_lora_periodic_handler(void)
 {
 	TimerSetValue(&appTimer, LORAWAN_APP_TX_DUTYCYCLE);
 	TimerStart(&appTimer);
-	Serial.println("Sending frame");
-	send_lora_frame();
+	//Only send data every 15 minutes
+	if ((gps.location.isValid()) && (gps.time.minute()%5 == 0) || gps.time.minute() == 0){
+		Serial.println("Sending frame");
+		send_lora_frame();
+	}
+	else {
+		if(!gps.location.isValid()){
+			Serial.println("GPS lost");
+		}
+		else{
+			Serial.printf("Minute: %u\n", gps.time.minute());
+		}
+	}
 }
+
 
 static uint32_t timers_init(void)
 {
@@ -313,3 +371,4 @@ static uint32_t timers_init(void)
 	TimerInit(&appTimer, tx_lora_periodic_handler);
 	return 0;
 }
+
